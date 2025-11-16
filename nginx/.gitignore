@@ -1,0 +1,13 @@
+# SSL сертификаты (не коммитить!)
+ssl/
+*.pem
+*.key
+*.crt
+
+# Логи
+logs/
+*.log
+
+# Certbot данные
+certbot/
+
