@@ -1,6 +1,6 @@
 aiogram==3.13.1
 aiomysql==0.3.2
-openai==1.54.5
+openai==2.7.1
 python-dotenv==1.0.1
 fastapi==0.115.0
 uvicorn[standard]==0.32.0

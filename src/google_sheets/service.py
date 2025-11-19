@@ -107,6 +107,7 @@ class GoogleSheetsService:
             product_map = {p.good_id: p for p in all_products}
             
             # Process each order (multiple addresses)
+            row_all = []
             for order in order_data:
                 # Skip if it's just a message
                 if order.get('message') and not order.get('adress'):
@@ -121,14 +122,14 @@ class GoogleSheetsService:
                     try:
                         product_id = int(product_id_str)
                         product = product_map.get(product_id)
-                        
+                        q_a = quantity * product.min_size
                         if product:
                             payment_type = order.get('payment_type', 'price_amt')
                             price = product.price_c if payment_type == 'price_c' else product.price_amt
-                            cost = price * (quantity / product.min_size)
+                            cost = price * (q_a)
                             total_sum += cost
                             
-                            goods_text += f"{product.name} - {quantity} {product.type} {cost:.2f} р.\n"
+                            goods_text += f"{product.name} - {q_a} {product.type} {cost:.2f} р.\n"
                     except (ValueError, TypeError):
                         pass
                 
@@ -143,21 +144,22 @@ class GoogleSheetsService:
                 
                 # Prepare row data
                 row = [
-                    str(user_id),  # id клиента
-                    f"@{username}" if username else "",  # Telegram клиента
-                    phone or "",  # Номер телефона
-                    organization,  # Организация
+                    order.get('company_name','Не распознано'),  # Организация
                     order.get('adress', ''),  # адрес доставки
                     goods_text.strip(),  # Товары
                     f"{total_sum:.2f}",  # Общая сумма
                     order_date_str,  # Дата
                     payment_form,  # форма оплаты
-                    delivery_date  # дата доставки
+                    delivery_date,  # дата доставки
+                    str(user_id),  # id клиента
+                    f"{username}" if username else "",  # Telegram клиента
+                    phone or "",  # Номер телефона
                 ]
-                
+                # logger.info(f"row ={row}")
+                row_all.append(row)
                 # Append row to worksheet
-                worksheet.append_row(row)
-                logger.info(f"Order written to Google Sheets: user_id={user_id}, address={order.get('adress')}")
+            worksheet.append_rows(row_all, value_input_option='RAW', insert_data_option='INSERT_ROWS', table_range='A:B')
+                # logger.info(f"Order written to Google Sheets: user_id={user_id}, address={order.get('adress')}")
             
             return True
             

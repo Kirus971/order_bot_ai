@@ -19,6 +19,7 @@ from src.text import start_0, start_1, start_2
 from src.google_sheets import get_google_sheets_service
 from datetime import datetime
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,13 +55,16 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
     async def process_organization(message: Message, state: FSMContext):
         """Process organization name during registration"""
         user_id = message.from_user.id
-        organization = message.text.strip()
-        
+        current_date = datetime.now()
+        mysql_timestamp = current_date.strftime('%Y-%m-%d %H:%M:%S')
         # Create user in database
         user = User(
             user_id=user_id,
-            organization=organization,
-            approved=False
+            tg_account=f'@{message.from_user.username}',
+            user_info=message.text,
+            approved=False,
+            date_register=mysql_timestamp,
+            user_name=message.from_user.first_name
         )
         await user.save()
         
@@ -75,7 +79,7 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
                     f"ID: {user_id}\n"
                     f"Имя: {message.from_user.first_name or 'Не указано'}\n"
                     f"Username: @{message.from_user.username or 'Не указано'}\n"
-                    f"Организация: {organization}",
+                    f"Организация: {message.text}",
                     reply_markup=keyboard
                 )
             except Exception as e:
@@ -180,6 +184,9 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
             
             # Format response
             response_text = await format_order_response(orders_data)
+
+            response_text += "\n✅ Если все верно - подтвердите заказ кнопкой ниже.\n"
+            response_text += "❌ Если есть ошибки - отправьте исправленный текст заказа."
             
             # Send order message with confirmation button
             order_message = await message.answer(
@@ -291,7 +298,7 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
             admin_message_text = await format_admin_order_message(
                 callback.from_user,
                 order_data,
-                user.organization if user else "Неизвестно"
+                user.user_info if user else "Неизвестно"
             )
             
             # Send to all admins
@@ -315,7 +322,8 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
             
             # Update state
             await state.update_data(admin_order_id=order.order_id)
-            await state.set_state(OrderStates.waiting_for_admin)
+            # await state.set_state(OrderStates.waiting_for_admin)
+            await state.set_state(OrderStates.waiting_for_order)
             
             await callback.answer("Заказ подтвержден и отправлен менеджеру!")
             
@@ -325,7 +333,7 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
             await callback.answer()
 
     @router.callback_query(F.data.startswith("admin_confirm:"))
-    async def confirm_admin_order(callback: CallbackQuery):
+    async def confirm_admin_order(callback: CallbackQuery, state: FSMContext):
         """Handle order confirmation by admin"""
         if callback.from_user.id not in admin_ids:
             await callback.answer("У вас нет прав для этого действия", show_alert=True)
@@ -357,7 +365,10 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
                 "SELECT * FROM orders WHERE user_id = %s AND status = 'pending_admin' ORDER BY created_at DESC LIMIT 1",
                 (user_id,)
             )
-            
+            username = await db.execute_query(
+                "SELECT tg_account FROM users WHERE user_id = %s LIMIT 1",
+                (user_id,)
+            )
             order_data = None
             if orders:
                 import json
@@ -376,13 +387,13 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
                     phone = None  # TODO: Get phone from user profile or database
                     
                     # Get username from callback or try to get from user
-                    username = callback.from_user.username or callback.from_user.first_name or ""
+                    # username = callback.from_user.username or callback.from_user.first_name or ""
                     
                     success = await sheets_service.write_order(
                         user_id=user_id,
-                        username=username,
+                        username=username[0]['tg_account'],
                         phone=phone,
-                        organization=user.organization,
+                        organization=user.user_info,
                         order_data=order_data,
                         order_date=datetime.now()
                     )
@@ -404,8 +415,9 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
             try:
                 await bot_instance.send_message(
                     user_id,
-                    "🎉 Ваш заказ подтвержден администратором! Заказ готов к обработке."
+                    "🎉 Ваш заказ подтвержден администратором!"
                 )
+                await state.set_state(OrderStates.waiting_for_order)
             except Exception as e:
                 logger.error(f"Failed to notify user {user_id}: {e}")
             

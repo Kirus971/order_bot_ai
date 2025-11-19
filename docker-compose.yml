@@ -9,13 +9,30 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"    # максимальный размер файла
+        max-file: "3"      # максимальное количество файлов
+    healthcheck:  
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 14400s  
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # Увеличиваем время на запуск приложения
     volumes:
       - ./logs:/app/logs
+      - ./nginx/ssl:/app/ssl:ro
+      - ./src:/app/src
     networks:
       - bot_network
-    # Не экспортируем порт наружу, только через nginx
+      - mssql_default
+    ports:
+      - "8000:8000"
     expose:
       - "8000"
+    # depends_on:
+    #   - mysql_server
 
   nginx:
     build:
@@ -24,8 +41,13 @@ services:
     container_name: order_bot_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8081:80"
       - "443:443"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -35,23 +57,13 @@ services:
       - bot
     networks:
       - bot_network
-    command: >
-      sh -c "
-      if [ ! -f /etc/nginx/ssl/cert.pem ] || [ ! -f /etc/nginx/ssl/key.pem ]; then
-        mkdir -p /etc/nginx/ssl &&
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-          -keyout /etc/nginx/ssl/key.pem \
-          -out /etc/nginx/ssl/cert.pem \
-          -subj '/C=RU/ST=State/L=City/O=Organization/CN=localhost' &&
-        echo 'Self-signed certificate generated'
-      fi &&
-      nginx -g 'daemon off;'
-      "
 
 volumes:
   certbot_data:
+  
 
 networks:
   bot_network:
     driver: bridge
-
+  mssql_default:
+    external: true

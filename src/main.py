@@ -4,8 +4,8 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher
-from aiogram.types import Update
+from aiogram import Bot, Dispatcher, Router, types
+from aiogram.types import Update ,FSInputFile
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from src.config import get_settings
@@ -44,7 +44,8 @@ async def lifespan(app: FastAPI):
     bot = Bot(token=settings.bot.token)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
-    router = dp.router
+    router = Router()
+    dp.include_router(router)
     
     # Setup handlers
     setup_handlers(router, bot, dp)
@@ -60,12 +61,11 @@ async def lifespan(app: FastAPI):
         
         if webhook_info.url != settings.webhook.webhook_url:
             webhook_kwargs = {"url": settings.webhook.webhook_url}
-            
             # Add certificate if provided
             if settings.webhook.certificate_path:
                 try:
                     with open(settings.webhook.certificate_path, 'rb') as cert:
-                        webhook_kwargs["certificate"] = cert.read()
+                        webhook_kwargs["certificate"] = FSInputFile(settings.webhook.certificate_path) #cert.read()
                 except FileNotFoundError:
                     logger.warning(f"Certificate file not found: {settings.webhook.certificate_path}")
             
@@ -79,9 +79,9 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    if settings.webhook:
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook deleted")
+    # if settings.webhook:
+    #     await bot.delete_webhook(drop_pending_updates=True)
+    #     logger.info("Webhook deleted")
     
     await db.close()
     await bot.session.close()
@@ -96,7 +96,7 @@ app = FastAPI(
 )
 
 # Путь для webhook нужно сделать сложнее для безопасности
-@app.post("/webhook")
+@app.post("/webhook_17821")
 async def webhook_handler(request: Request):
     """Handle webhook requests from Telegram"""
     try:
