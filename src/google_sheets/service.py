@@ -1,5 +1,6 @@
 """Google Sheets service for writing orders"""
 import logging
+import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
 import gspread
@@ -39,36 +40,41 @@ class GoogleSheetsService:
         else:
             logger.warning("Google Sheets credentials not configured")
 
-    def _get_worksheet(self):
-        """Get or create worksheet"""
+    async def _get_worksheet(self):
+        """Get or create worksheet (async wrapper)"""
         if not self._client:
             raise ValueError("Google Sheets client not initialized")
         
         if not self._worksheet:
-            spreadsheet = self._client.open_by_key(self.spreadsheet_id)
-            try:
-                self._worksheet = spreadsheet.worksheet(self.worksheet_name)
-            except gspread.exceptions.WorksheetNotFound:
-                # Create worksheet if it doesn't exist
-                self._worksheet = spreadsheet.add_worksheet(
-                    title=self.worksheet_name,
-                    rows=1000,
-                    cols=10
-                )
-                # Add headers
-                headers = [
-                    "id клиента",
-                    "Telegram клиента",
-                    "Номер телефона",
-                    "Организация",
-                    "адрес доставки",
-                    "Товары",
-                    "Общая сумма",
-                    "Дата",
-                    "форма оплаты",
-                    "дата доставки"
-                ]
-                self._worksheet.append_row(headers)
+            # Run synchronous operations in thread pool
+            def _sync_get_worksheet():
+                spreadsheet = self._client.open_by_key(self.spreadsheet_id)
+                try:
+                    return spreadsheet.worksheet(self.worksheet_name)
+                except gspread.exceptions.WorksheetNotFound:
+                    # Create worksheet if it doesn't exist
+                    worksheet = spreadsheet.add_worksheet(
+                        title=self.worksheet_name,
+                        rows=1000,
+                        cols=10
+                    )
+                    # Add headers
+                    headers = [
+                        "id клиента",
+                        "Telegram клиента",
+                        "Номер телефона",
+                        "Организация",
+                        "адрес доставки",
+                        "Товары",
+                        "Общая сумма",
+                        "Дата",
+                        "форма оплаты",
+                        "дата доставки"
+                    ]
+                    worksheet.append_row(headers)
+                    return worksheet
+            
+            self._worksheet = await asyncio.to_thread(_sync_get_worksheet)
         
         return self._worksheet
 
@@ -100,7 +106,7 @@ class GoogleSheetsService:
                 logger.error("Google Sheets client not initialized")
                 return False
             
-            worksheet = self._get_worksheet()
+            worksheet = await self._get_worksheet()
             
             # Get all products for lookup
             all_products = await Assortment.get_all()
@@ -147,7 +153,7 @@ class GoogleSheetsService:
                     order.get('company_name','Не распознано'),  # Организация
                     order.get('adress', ''),  # адрес доставки
                     goods_text.strip(),  # Товары
-                    f"{total_sum:.2f}",  # Общая сумма
+                    total_sum,  # Общая сумма
                     order_date_str,  # Дата
                     payment_form,  # форма оплаты
                     delivery_date,  # дата доставки
@@ -157,8 +163,12 @@ class GoogleSheetsService:
                 ]
                 # logger.info(f"row ={row}")
                 row_all.append(row)
-                # Append row to worksheet
-            worksheet.append_rows(row_all, value_input_option='RAW', insert_data_option='INSERT_ROWS', table_range='A:B')
+            
+            # Append rows to worksheet (run in thread pool)
+            def _sync_append_rows():
+                worksheet.append_rows(row_all, value_input_option='RAW', insert_data_option='INSERT_ROWS', table_range='A:B')
+            
+            await asyncio.to_thread(_sync_append_rows)
                 # logger.info(f"Order written to Google Sheets: user_id={user_id}, address={order.get('adress')}")
             
             return True

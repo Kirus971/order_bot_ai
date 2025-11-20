@@ -5,12 +5,15 @@ import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, Router, types
-from aiogram.types import Update ,FSInputFile
+from aiogram.types import Update ,FSInputFile,ErrorEvent
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from src.config import get_settings
 from src.database import get_database
 from src.bot import setup_handlers
+
+import html
+import traceback
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +28,41 @@ logger = logging.getLogger(__name__)
 # Global bot and dispatcher instances
 bot: Bot = None
 dp: Dispatcher = None
+
+async def _error_handler(event: ErrorEvent):
+    """
+    Глобальный обработчик ошибок для aiogram 3.x
+    """
+    logging.error("Exception occurred", exc_info=event.exception)
+    
+    # Формируем сообщение об ошибке
+    tb_list = traceback.format_exception(
+        type(event.exception), 
+        event.exception, 
+        event.exception.__traceback__
+    )
+    tb_string = "".join(tb_list)
+    
+    # Обрезаем traceback если слишком длинный
+    if len(tb_string) > 3000:
+        tb_string = tb_string[:3000] + "..."
+    
+    message = (
+        "❌ <b>Произошла ошибка</b>\n\n"
+        f"<code>{html.escape(str(event.exception))}</code>\n\n"
+        f"<pre>{html.escape(tb_string)}</pre>"
+    )
+    
+    # Отправляем сообщение разработчику
+    try:
+        bot = event.bot
+        await bot.send_message(
+            chat_id=417687393,
+            text=message,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to send error message: {e}")
 
 
 @asynccontextmanager
@@ -49,6 +87,7 @@ async def lifespan(app: FastAPI):
     
     # Setup handlers
     setup_handlers(router, bot, dp)
+    dp.errors.register(_error_handler)
     
     # Initialize bot (don't start polling if webhook is configured)
     if not settings.webhook:

@@ -290,9 +290,30 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
                 status='pending_admin'
             )
             await order.save()
-            
-            # Get user info
+
             user = await User.get_by_id(user_id)
+
+            # If user is admin, confirm immediately without additional approval
+            if user_id in admin_ids:
+                await _confirm_order_as_admin(order, order_data, user)
+                
+                await callback.message.edit_text(
+                    f"✅ Заказ подтвержден (вы администратор) и отправлен менеджеру!\n\n{callback.message.text}",
+                    reply_markup=None
+                )
+                await state.update_data(admin_order_id=order.order_id)
+                await state.set_state(OrderStates.waiting_for_order)
+                
+                try:
+                    await bot_instance.send_message(
+                        user_id,
+                        "🎉 Заказ администратором подтвержден без дополнительного согласования."
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin user {user_id} about auto confirmation: {e}")
+                
+                await callback.answer("Заказ подтвержден!")
+                return
             
             # Format message for admin
             admin_message_text = await format_admin_order_message(
@@ -300,7 +321,6 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
                 order_data,
                 user.user_info if user else "Неизвестно"
             )
-            
             # Send to all admins
             admin_keyboard = get_admin_confirm_order_keyboard(user_id, order_message_id)
             
@@ -365,45 +385,23 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
                 "SELECT * FROM orders WHERE user_id = %s AND status = 'pending_admin' ORDER BY created_at DESC LIMIT 1",
                 (user_id,)
             )
-            username = await db.execute_query(
-                "SELECT tg_account FROM users WHERE user_id = %s LIMIT 1",
-                (user_id,)
-            )
-            order_data = None
-            if orders:
-                import json
-                order_data = json.loads(orders[0]['order_data'])
-                # Update order status
-                await db.execute_command(
-                    "UPDATE orders SET status = 'confirmed' WHERE order_id = %s",
-                    (orders[0]['order_id'],)
-                )
+            if not orders:
+                await callback.answer("Заказ не найден или уже подтвержден", show_alert=True)
+                return
             
-            # Write to Google Sheets
-            if order_data:
-                try:
-                    sheets_service = get_google_sheets_service()
-                    # Get user phone if available (you might want to store it in User model)
-                    phone = None  # TODO: Get phone from user profile or database
-                    
-                    # Get username from callback or try to get from user
-                    # username = callback.from_user.username or callback.from_user.first_name or ""
-                    
-                    success = await sheets_service.write_order(
-                        user_id=user_id,
-                        username=username[0]['tg_account'],
-                        phone=phone,
-                        organization=user.user_info,
-                        order_data=order_data,
-                        order_date=datetime.now()
-                    )
-                    
-                    if success:
-                        logger.info(f"Order written to Google Sheets for user {user_id}")
-                    else:
-                        logger.warning(f"Failed to write order to Google Sheets for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Error writing to Google Sheets: {e}", exc_info=True)
+            import json
+            order_row = orders[0]
+            order_data = json.loads(order_row['order_data'])
+            order = OrderModel(
+                order_id=order_row['order_id'],
+                user_id=user_id,
+                order_data=order_data,
+                status=order_row['status'],
+                created_at=order_row.get('created_at')
+            )
+            
+            # Common admin confirmation logic
+            await _confirm_order_as_admin(order, order_data, user)
             
             # Update admin message
             await callback.message.edit_text(
@@ -427,3 +425,32 @@ def setup_handlers(router: Router, bot: Bot, dp: Dispatcher):
             logger.error(f"Error confirming order by admin: {e}", exc_info=True)
             await callback.answer("❌ Ошибка при подтверждении заказа", show_alert=True)
 
+
+    async def _confirm_order_as_admin(order: OrderModel, order_data, user: User):
+        """Common logic for admin confirmation: update status and write to Google Sheets"""
+        user_id = user.user_id if user else order.user_id
+        
+        try:
+            await order.update_status('confirmed')
+        except Exception as e:
+            logger.error(f"Failed to update order status for user {user_id}: {e}")
+        
+        try:
+            sheets_service = get_google_sheets_service()
+            username = (
+                (user.tg_account if user and user.tg_account else None)
+                or f"@{user.user_name}" if user and user.user_name else str(user_id)
+            )
+            phone = user.phone if user else None
+            organization = user.user_info if user and user.user_info else "Неизвестно"
+            
+            await sheets_service.write_order(
+                user_id=user_id,
+                username=username,
+                phone=phone,
+                organization=organization,
+                order_data=order_data,
+                order_date=datetime.now()
+            )
+        except Exception as e:
+            logger.error(f"Error writing confirmed order to Google Sheets for user {user_id}: {e}", exc_info=True)
